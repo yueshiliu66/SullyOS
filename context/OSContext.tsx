@@ -632,6 +632,18 @@ const defaultApiConfig: APIConfig = {
     apiKey: '',
     model: '',
   },
+  imageGeneration: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    model: 'gpt-image-1',
+    globalPrompt: '',
+    size: '1024x1024',
+    quality: 'auto',
+    autoChat: true,
+    autoSocial: true,
+    cooldownMessages: 6,
+  },
   minimaxApiKey: '',
   minimaxGroupId: '',
   minimaxRegion: 'domestic',
@@ -2334,7 +2346,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   // 不存在；保持 undefined 即可，与"用户当时根本没在 chat 界面"的语义一致
                   htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
                   thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
-                  visionApiConfig: currentApiConfig.visionApi,
+                visionApiConfig: currentApiConfig.visionApi,
+                imageGenerationConfig: currentApiConfig.imageGeneration,
               });
               const systemPrompt = payload.systemPrompt;
               const apiMessages = payload.cleanedApiMessages;
