@@ -18,6 +18,7 @@ export const normalizeApiModel = (value: unknown): string =>
 
 export function normalizeApiConfig(config: APIConfig): APIConfig {
   const visionApi = config.visionApi;
+  const imageGeneration = config.imageGeneration;
   return {
     ...config,
     baseUrl: normalizeApiBaseUrl(config.baseUrl),
@@ -29,6 +30,17 @@ export function normalizeApiConfig(config: APIConfig): APIConfig {
         baseUrl: normalizeApiBaseUrl(visionApi.baseUrl),
         apiKey: normalizeApiCredential(visionApi.apiKey),
         model: normalizeApiModel(visionApi.model),
+      },
+    } : {}),
+    ...(imageGeneration ? {
+      imageGeneration: {
+        ...imageGeneration,
+        enabled: imageGeneration.enabled === true,
+        baseUrl: normalizeApiBaseUrl(imageGeneration.baseUrl),
+        apiKey: normalizeApiCredential(imageGeneration.apiKey),
+        model: normalizeApiModel(imageGeneration.model),
+        globalPrompt: String(imageGeneration.globalPrompt ?? '').trim(),
+        cooldownMessages: Math.max(0, Math.min(100, Math.round(Number(imageGeneration.cooldownMessages) || 0))),
       },
     } : {}),
   };
