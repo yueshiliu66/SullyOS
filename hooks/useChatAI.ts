@@ -511,6 +511,7 @@ export const useChatAI = ({
     const [searchStatus, setSearchStatus] = useState<string>('');
     const [diaryStatus, setDiaryStatus] = useState<string>('');
     const [xhsStatus, setXhsStatus] = useState<string>('');
+    const [imageStatus, setImageStatus] = useState<string>('');
     const [emotionStatus, setEmotionStatus] = useState<string>('');
     const [memoryPalaceStatus, setMemoryPalaceStatus] = useState<string>('');
     const [memoryPalaceResult, setMemoryPalaceResult] = useState<import('../utils/memoryPalace/pipeline').PipelineResult | null>(null);
@@ -1001,6 +1002,7 @@ export const useChatAI = ({
                 htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
                 thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
                 visionApiConfig: apiConfig.visionApi,
+                imageGenerationConfig: apiConfig.imageGeneration,
                 mcdMiniSnap: mcdMiniOpen ? mcdMiniSnap : undefined,
                 luckinMiniSnap: luckinMiniOpen ? luckinMiniSnap : undefined,
                 luckinChat: luckinChatOn ? luckinChatRef?.current : undefined,
@@ -2115,6 +2117,7 @@ export const useChatAI = ({
                 emojis,
                 categories,
                 realtimeConfig,
+                imageGenerationConfig: apiConfig.imageGeneration,
                 groups,
                 contextMsgs,
                 fullMessages,
@@ -2134,6 +2137,7 @@ export const useChatAI = ({
                     setSearchStatus,
                     setDiaryStatus,
                     setXhsStatus,
+                    setImageStatus,
                     updateTokenUsage,
                     // 整组 musicHooks 由 MusicProvider 注册到模块级 slot, 本地 fetch 路径和
                     // instant push 路径 (activeMsgRuntime) 共享同一份, 见 MusicContext.loadMusicHooks.
@@ -2333,6 +2337,7 @@ export const useChatAI = ({
         searchStatus,
         diaryStatus,
         xhsStatus,
+        imageStatus,
         emotionStatus,
         memoryPalaceStatus,
         memoryPalaceResult,

@@ -678,6 +678,7 @@ const processInboxMessageWithPostProcessing = async (
     emojis,
     categories,
     realtimeConfig,
+    imageGenerationConfig: apiConfig.imageGeneration,
     // 日程改动按「角色说这句话的那一刻」判，不是按现在——这条可能在收件箱里躺了一夜，
     // 昨晚的「22:00 改成陪你聊天」不该落到今天的 22:00 上。
     spokenAt: message.sentAt,
