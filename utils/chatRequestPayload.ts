@@ -13,7 +13,7 @@ import { getMemoryPalaceHighWaterMarkForContext, selectCharacterContextMessages 
  * 等价。新增 caller（runProactive）只是补齐了过去缺的字段。
  */
 
-import type { CharacterProfile, UserProfile, GroupProfile, Emoji, EmojiCategory, Message, RealtimeConfig, TranslationConfig, VisionApiConfig } from '../types';
+import type { CharacterProfile, UserProfile, GroupProfile, Emoji, EmojiCategory, Message, RealtimeConfig, TranslationConfig, VisionApiConfig, ImageGenerationConfig } from '../types';
 import { ChatPrompts, detectChatModeTransition } from './chatPrompts';
 import { ContextBuilder } from './context';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
@@ -42,6 +42,7 @@ import type { RecallEntryPoint, RecallTrace } from './memoryPalace/trace';
 import { loadCollaborationFileCabinetBlock } from '../features/collaboration/chatLibrary';
 import { buildSARUserSurfaceRequest, selectSARUserSurfaceTargets } from './vrWorld/sarUserSurface';
 import { getSARModuleRuntimePlan } from './vrWorld/sarModuleRuntime';
+import { buildChatImageGenerationInstruction } from './imageGeneration';
 
 export { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
 
@@ -97,6 +98,8 @@ export interface BuildChatPayloadInput {
     thinkingChain?: { enabled: boolean; customPrompt?: string };
     /** 可选识图 API：开启后先把图片持久化转写为 [图片：描述]，主模型只接收文字。 */
     visionApiConfig?: VisionApiConfig;
+    /** 角色可在普通聊天回复末尾按需发出一次隐藏生图指令。 */
+    imageGenerationConfig?: ImageGenerationConfig;
     mcdMiniSnap?: McdMiniAppSnapshot;
     luckinMiniSnap?: LuckinMiniAppSnapshot;
     /** 瑞幸聊天点单模式 (点"瑞一杯"激活, 角色直接调真实工具) */
@@ -340,6 +343,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         } : undefined,
     );
     let systemPrompt = parts.stable;
+    systemPrompt += buildChatImageGenerationInstruction(input.imageGenerationConfig, char, input.historyMsgs);
     let volatileTail = parts.volatileState;
     const sarModulePlan = input.recallEntryPoint === 'chat_app'
         ? getSARModuleRuntimePlan(char, userProfile)
