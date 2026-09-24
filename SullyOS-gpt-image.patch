@@ -1,0 +1,1154 @@
+From 0efedcaf55937f9303355b15a65ad0353fe121e2 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 24 Sep 2026 00:04:10 -0500
+Subject: [PATCH] feat: add GPT Image generation to chat and Spark
+
+---
+ apps/Character.tsx                            |   7 +
+ apps/Chat.tsx                                 |  13 +-
+ apps/Settings.tsx                             |   3 +
+ apps/SocialApp.tsx                            |  35 +++-
+ components/character/ImageGenerationPanel.tsx |  95 +++++++++
+ .../settings/ImageGenerationSettings.tsx      | 113 ++++++++++
+ context/OSContext.tsx                         |  15 +-
+ hooks/useChatAI.ts                            |   5 +
+ types.ts                                      |  33 +++
+ utils/activeMsgRuntime.ts                     |   1 +
+ utils/apiConfigNormalize.test.ts              |  24 +++
+ utils/apiConfigNormalize.ts                   |  12 ++
+ utils/applyAssistantPostProcessing.ts         |  57 +++++-
+ utils/buildInfo.ts                            |   2 +-
+ utils/chatPrompts.ts                          |   6 +
+ utils/chatRequestPayload.ts                   |   6 +-
+ utils/imageGeneration.test.ts                 |  98 +++++++++
+ utils/imageGeneration.ts                      | 193 ++++++++++++++++++
+ 18 files changed, 706 insertions(+), 12 deletions(-)
+ create mode 100644 components/character/ImageGenerationPanel.tsx
+ create mode 100644 components/settings/ImageGenerationSettings.tsx
+ create mode 100644 utils/imageGeneration.test.ts
+ create mode 100644 utils/imageGeneration.ts
+
+diff --git a/apps/Character.tsx b/apps/Character.tsx
+index 51ee6c8b..6f7323fa 100644
+--- a/apps/Character.tsx
++++ b/apps/Character.tsx
+@@ -14,6 +14,7 @@ import ImpressionPanel from '../components/character/ImpressionPanel';
+ import RoomPlatePanel from '../components/character/RoomPlatePanel';
+ import MemoryArchivist from '../components/character/MemoryArchivist';
+ import ChibiStudio, { ChibiShelfPanel } from '../components/character/ChibiStudio';
++import ImageGenerationPanel from '../components/character/ImageGenerationPanel';
+ import TokenImg from '../components/os/TokenImg';
+ import { resolveBlobRefsDeep, migrateDataUrlToRef } from '../utils/blobRef';
+ import { characterLaunch } from '../utils/characterLaunch';
+@@ -1402,6 +1403,12 @@ ${isInitialGeneration ? `
+                                <textarea value={formData.systemPrompt} onChange={(e) => handleChange('systemPrompt', e.target.value)} className="w-full h-40 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll" placeholder="设定..." />
+                            </div>
+ 
++                           <ImageGenerationPanel
++                               value={formData.imageGeneration}
++                               onChange={(imageGeneration) => handleChange('imageGeneration', imageGeneration)}
++                               addToast={addToast}
++                           />
++
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">世界观 / 设定补充 (Worldview & Lore)</label>
+                                <textarea
+diff --git a/apps/Chat.tsx b/apps/Chat.tsx
+index 77089e0e..634f4dd5 100644
+--- a/apps/Chat.tsx
++++ b/apps/Chat.tsx
+@@ -411,7 +411,7 @@ const Chat: React.FC = () => {
+     }, [activeCharacterId]);
+ 
+     // --- Initialize Hook ---
+-    const { isTyping, streamingBubbles, streamingThinking, streamingHandoverIds, recallStatus, searchStatus, diaryStatus, emotionStatus, memoryPalaceStatus, memoryPalaceResult, setMemoryPalaceResult, lastDigestResult, setLastDigestResult, lastTokenUsage, tokenBreakdown, setLastTokenUsage, triggerAI, startProactiveChat, stopProactiveChat, isProactiveActive } = useChatAI({
++    const { isTyping, streamingBubbles, streamingThinking, streamingHandoverIds, recallStatus, searchStatus, diaryStatus, imageStatus, emotionStatus, memoryPalaceStatus, memoryPalaceResult, setMemoryPalaceResult, lastDigestResult, setLastDigestResult, lastTokenUsage, tokenBreakdown, setLastTokenUsage, triggerAI, startProactiveChat, stopProactiveChat, isProactiveActive } = useChatAI({
+         char,
+         userProfile,
+         apiConfig,
+@@ -1328,7 +1328,7 @@ const Chat: React.FC = () => {
+                 scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+             }
+         }
+-    }, [messages, isTyping, streamingBubbles, streamingThinking, recallStatus, searchStatus, diaryStatus, selectionMode, windowedFocusMsgId]);
++    }, [messages, isTyping, streamingBubbles, streamingThinking, recallStatus, searchStatus, diaryStatus, imageStatus, selectionMode, windowedFocusMsgId]);
+ 
+     // 白框提示音：当 char 新发的消息成为会话最后一条时播放一次（用户自己/历史/翻旧消息都不响）。
+     // 声音配置编码在白框 CSS 注释里（角色 chromeCustomCss 覆盖全局 chatChromeCustomCss），随白框分享一起走。
+@@ -4269,15 +4269,20 @@ const Chat: React.FC = () => {
+                     </>
+                 )}
+                 {/* instantChatPending：这一轮在云端跑，本机可以关页面，指示灯靠落盘记录活着。 */}
+-                {(isTyping || instantChatPending || recallStatus || searchStatus || diaryStatus || isProactiveComposing) && !selectionMode && (
++                {(isTyping || instantChatPending || recallStatus || searchStatus || diaryStatus || imageStatus || isProactiveComposing) && !selectionMode && (
+                     <div className="flex items-end gap-3 px-3 mb-6 animate-fade-in">
+                         <TokenImg value={char.avatar} className={chatPendingAvatarClass} />
+                         <div className="bg-white px-4 py-3 rounded-2xl shadow-sm">
+-                            {isProactiveComposing && !isTyping && !recallStatus && !searchStatus && !diaryStatus ? (
++                            {isProactiveComposing && !isTyping && !recallStatus && !searchStatus && !diaryStatus && !imageStatus ? (
+                                 <div className="flex items-center gap-2 text-xs text-teal-600 font-medium">
+                                     <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                     {char.name} 在给你写消息…
+                                 </div>
++                            ) : imageStatus ? (
++                                <div className="flex items-center gap-2 text-xs text-violet-500 font-medium">
++                                    <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
++                                    🎨 {imageStatus}
++                                </div>
+                             ) : searchStatus ? (
+                                 <div className="flex items-center gap-2 text-xs text-emerald-500 font-medium">
+                                     <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+diff --git a/apps/Settings.tsx b/apps/Settings.tsx
+index bda3591d..81ab87dd 100644
+--- a/apps/Settings.tsx
++++ b/apps/Settings.tsx
+@@ -35,6 +35,7 @@ import VersionInfo from '../components/settings/VersionInfo';
+ import { isPushVapidReady } from '../utils/pushVapid';
+ import ApiCallLogModal from '../components/settings/ApiCallLogModal';
+ import StorageUsagePanel from '../components/settings/StorageUsagePanel';
++import ImageGenerationSettings from '../components/settings/ImageGenerationSettings';
+ import McpConnectionConsole from '../components/settings/McpConnectionConsole';
+ import { DB } from '../utils/db';
+ import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
+@@ -2762,6 +2763,8 @@ const Settings: React.FC = () => {
+             </p>
+ 
+             <div className="space-y-4">
++                <ImageGenerationSettings apiConfig={apiConfig} updateApiConfig={updateApiConfig} addToast={addToast} />
++
+                 <p className="text-[11px] text-slate-400 -mt-1 pl-1 leading-relaxed">
+                     🎙️ 语音生成支持 <span className="font-semibold text-slate-500">MiniMax</span>、<span className="font-semibold text-slate-500">鱼声 Fish</span> 和 <span className="font-semibold text-slate-500">ElevenLabs</span>。三家的配置都会保留，最后在底部选择当前引擎。
+                 </p>
+diff --git a/apps/SocialApp.tsx b/apps/SocialApp.tsx
+index 50fd91e2..83398ef0 100644
+--- a/apps/SocialApp.tsx
++++ b/apps/SocialApp.tsx
+@@ -6,7 +6,8 @@ import { DB } from '../utils/db';
+ import { CharacterProfile, SocialPost, SocialComment, SubAccount, SocialAppProfile } from '../types';
+ import { buildSparkCommentHistory, buildSparkGenerationContext, resolveSparkAuthor, selectSparkParticipants } from '../utils/socialGeneration';
+ import { processImageToBlob } from '../utils/file';
+-import { putImageBlob } from '../utils/blobRef';
++import { isImageValue, putImageBlob } from '../utils/blobRef';
++import { generateImageToBlobRef, withImageGenerationDefaults } from '../utils/imageGeneration';
+ import Modal from '../components/os/Modal';
+ import { extractContent, safeResponseJson } from '../utils/safeApi';
+ import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
+@@ -421,6 +422,23 @@ const SocialApp: React.FC = () => {
+         return result.post;
+     };
+ 
++    const generateCharacterPostImage = async (posts: SocialPost[]) => {
++        const config = withImageGenerationDefaults(apiConfig.imageGeneration);
++        if (!config.enabled || !config.autoSocial) return;
++        // 每次刷新至多生成一张，既保持推荐流的图文混合感，也避免一次刷新连续产生多笔费用。
++        const target = posts.find(post => post.authorType === 'character' && post.authorCharId && post.generatedImagePrompt);
++        if (!target) return;
++        const char = characters.find(candidate => candidate.id === target.authorCharId);
++        if (!char || char.imageGeneration?.allowSocial === false) return;
++        try {
++            const generated = await generateImageToBlobRef(config, char, target.generatedImagePrompt!);
++            updatePostInFeed(target.id, current => ({ ...current, images: [generated.ref] }));
++        } catch (error) {
++            console.error('[Spark ImageGeneration] 动态配图失败', error);
++            addToast(`Spark 配图失败：${error instanceof Error ? error.message : String(error)}`, 'error');
++        }
++    };
++
+     const removePostFromFeed = (postId: string) => {
+         const next = feedRef.current.filter(p => p.id !== postId);
+         feedRef.current = next;
+@@ -476,6 +494,7 @@ const SocialApp: React.FC = () => {
+     "authorName": "必须填身份表中定义的【网名】",
+     "title": "简短吸睛的标题",
+     "content": "正文内容...",
++    "imagePrompt": "角色帖可填写具体配图画面描述，路人帖填null",
+     "emojis": ["🎈", "✨"],
+     "likes": 随机数 (0 - 10000)
+   },
+@@ -526,11 +545,13 @@ const SocialApp: React.FC = () => {
+                     bgStyle: getRandomStyle().bg,
+                     authorType: isCharacterPost ? 'character' as const : 'stranger' as const,
+                     authorCharId: matchedChar?.id,
++                    generatedImagePrompt: isCharacterPost && typeof item.imagePrompt === 'string' ? item.imagePrompt.trim() : undefined,
+                 }];
+             });
+             if (!newPosts.length) throw new Error('模型返回的作者身份不匹配，未添加帖子');
+             prependPostsToFeed(newPosts);
+             addToast('首页已刷新: 冲浪模式开启', 'success');
++            await generateCharacterPostImage(newPosts);
+         } catch (e: any) {
+             if (e?.name !== 'AbortError') addToast('刷新失败: ' + e.message, 'error');
+         } finally {
+@@ -846,7 +867,9 @@ ${buildSparkCommentHistory(post)}
+             <div className="aspect-[4/5] w-full flex items-center justify-center relative overflow-hidden" style={{ background: post.bgStyle }}>
+                 {/* Decorative Overlay for "Premium" look */}
+                 <div className="absolute inset-0 bg-white/5 backdrop-blur-[1px]"></div>
+-                <div className="relative z-10 text-6xl drop-shadow-xl filter saturate-150 transform transition-transform group-hover:scale-110 duration-500">{codepointToEmoji(post.images[0])}</div>
++                {isImageValue(post.images[0])
++                    ? <TokenImg value={post.images[0]} className="absolute inset-0 w-full h-full object-cover" alt={post.title} />
++                    : <div className="relative z-10 text-6xl drop-shadow-xl filter saturate-150 transform transition-transform group-hover:scale-110 duration-500">{codepointToEmoji(post.images[0])}</div>}
+                 {post.title && (
+                     <div className="absolute bottom-0 left-0 w-full p-4 bg-gradient-to-t from-black/50 via-black/20 to-transparent">
+                         <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md leading-tight">{post.title}</h3>
+@@ -901,7 +924,9 @@ ${buildSparkCommentHistory(post)}
+                         <div className="w-full aspect-square flex items-center justify-center text-[8rem] relative overflow-hidden" style={{ background: selectedPost.bgStyle }}>
+                             <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/10"></div>
+                             {/* Removed animate-bounce-slow to prevent reflow jitter */}
+-                            <div className="relative z-10 drop-shadow-2xl filter saturate-125">{codepointToEmoji(selectedPost.images[0])}</div>
++                            {isImageValue(selectedPost.images[0])
++                                ? <TokenImg value={selectedPost.images[0]} className="absolute inset-0 w-full h-full object-cover" alt={selectedPost.title} />
++                                : <div className="relative z-10 drop-shadow-2xl filter saturate-125">{codepointToEmoji(selectedPost.images[0])}</div>}
+                         </div>
+ 
+                         <div className="p-6 space-y-4">
+@@ -1233,7 +1258,9 @@ ${buildSparkCommentHistory(post)}
+                                 <div className="columns-2 gap-2 space-y-2">
+                                     {feed.filter(p => profileTab === 'notes' ? (p.authorType === 'user' || (!p.authorType && p.authorName === socialProfile.name)) : p.isCollected).map(post => (
+                                         <div key={post.id} onClick={() => handleOpenPost(post)} className="break-inside-avoid bg-white rounded-xl overflow-hidden shadow-sm border border-slate-100 cursor-pointer">
+-                                            <div className="aspect-[4/5] flex items-center justify-center text-4xl" style={{ background: post.bgStyle }}>{codepointToEmoji(post.images[0])}</div>
++                                            <div className="aspect-[4/5] flex items-center justify-center text-4xl relative overflow-hidden" style={{ background: post.bgStyle }}>
++                                                {isImageValue(post.images[0]) ? <TokenImg value={post.images[0]} className="absolute inset-0 w-full h-full object-cover" alt={post.title} /> : codepointToEmoji(post.images[0])}
++                                            </div>
+                                             <div className="p-3">
+                                                 <h4 className="text-xs font-bold text-slate-800 line-clamp-2 leading-tight">{post.title}</h4>
+                                                 <div className="flex justify-between items-center mt-2">
+diff --git a/components/character/ImageGenerationPanel.tsx b/components/character/ImageGenerationPanel.tsx
+new file mode 100644
+index 00000000..227acf30
+--- /dev/null
++++ b/components/character/ImageGenerationPanel.tsx
+@@ -0,0 +1,95 @@
++import React, { useRef, useState } from 'react';
++import type { CharacterImageGenerationProfile } from '../../types';
++import { processImageToBlob } from '../../utils/file';
++import { putImageBlob } from '../../utils/blobRef';
++import TokenImg from '../os/TokenImg';
++
++interface Props {
++  value?: CharacterImageGenerationProfile;
++  onChange: (value: CharacterImageGenerationProfile) => void;
++  addToast: (message: string, type?: 'success' | 'error' | 'info') => void;
++}
++
++const ImageGenerationPanel: React.FC<Props> = ({ value, onChange, addToast }) => {
++  const inputRef = useRef<HTMLInputElement>(null);
++  const [uploading, setUploading] = useState(false);
++  const profile: CharacterImageGenerationProfile = {
++    appearancePrompt: '', referenceImages: [], faceLockStrength: 75,
++    allowChat: true, allowSocial: true, ...(value || {}),
++  };
++  const patch = (updates: Partial<CharacterImageGenerationProfile>) => onChange({ ...profile, ...updates });
++
++  const upload = async (files: FileList | null) => {
++    if (!files?.length) return;
++    const remaining = Math.max(0, 4 - (profile.referenceImages?.length || 0));
++    if (remaining === 0) return addToast('每个角色最多保存 4 张参考图', 'info');
++    setUploading(true);
++    try {
++      const refs: string[] = [];
++      for (const file of Array.from(files).slice(0, remaining)) {
++        const blob = await processImageToBlob(file, { maxWidth: 1600, quality: 0.9 });
++        refs.push(await putImageBlob(blob));
++      }
++      patch({ referenceImages: [...(profile.referenceImages || []), ...refs] });
++      addToast(`已添加 ${refs.length} 张角色参考图`, 'success');
++    } catch (error) {
++      addToast(error instanceof Error ? error.message : '参考图上传失败', 'error');
++    } finally {
++      setUploading(false);
++      if (inputRef.current) inputRef.current.value = '';
++    }
++  };
++
++  return (
++    <div className="bg-white rounded-3xl p-4 shadow-sm border border-violet-100 space-y-4">
++      <div>
++        <label className="text-[10px] font-bold text-violet-500 uppercase tracking-widest block">角色生图形象</label>
++        <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">这里固定角色本人；每次情境、姿势和环境由角色在聊天或 Spark 中临时决定。</p>
++      </div>
++
++      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">角色外貌提示词 / 生图串
++        <textarea
++          value={profile.appearancePrompt || ''}
++          onChange={event => patch({ appearancePrompt: event.target.value })}
++          className="w-full h-28 mt-1.5 bg-violet-50/40 rounded-2xl p-3 text-sm text-slate-700 resize-y outline-none focus:ring-1 focus:ring-violet-200"
++          placeholder="发色、瞳色、脸型、身材、常用服装、画风等固定特征…"
++        />
++      </label>
++
++      <div>
++        <div className="flex items-center justify-between gap-2 mb-2">
++          <div>
++            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">锁脸参考图（最多 4 张）</p>
++            <p className="text-[10px] text-slate-400 mt-0.5">建议上传清晰正脸、侧脸或不同光线照片。</p>
++          </div>
++          <button type="button" disabled={uploading} onClick={() => inputRef.current?.click()} className="px-3 py-2 rounded-xl bg-violet-100 text-violet-700 text-xs font-bold disabled:opacity-50">
++            {uploading ? '处理中…' : '＋上传'}
++          </button>
++          <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={event => void upload(event.target.files)} />
++        </div>
++        {!!profile.referenceImages?.length && (
++          <div className="grid grid-cols-4 gap-2">
++            {profile.referenceImages.map((ref, index) => (
++              <div key={`${ref}-${index}`} className="relative aspect-square rounded-xl overflow-hidden bg-slate-100 group">
++                <TokenImg value={ref} className="w-full h-full object-cover" alt={`参考图 ${index + 1}`} />
++                <button type="button" onClick={() => patch({ referenceImages: profile.referenceImages?.filter((_, i) => i !== index) })} className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/55 text-white text-xs">×</button>
++              </div>
++            ))}
++          </div>
++        )}
++      </div>
++
++      <label className="block text-[10px] font-bold text-slate-400">锁脸强度：{profile.faceLockStrength || 0}%
++        <input type="range" min={0} max={100} value={profile.faceLockStrength || 0} onChange={event => patch({ faceLockStrength: Number(event.target.value) })} className="w-full mt-2 accent-violet-500" />
++        <span className="font-normal leading-relaxed block mt-1">0% 不发送参考图；更高强度会强化身份保持。兼容模型不支持连续数值时，系统会映射为低/高保真并同时强化提示词。</span>
++      </label>
++
++      <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
++        <label className="flex items-center gap-2"><input type="checkbox" checked={profile.allowChat !== false} onChange={event => patch({ allowChat: event.target.checked })} />允许聊天主动生图</label>
++        <label className="flex items-center gap-2"><input type="checkbox" checked={profile.allowSocial !== false} onChange={event => patch({ allowSocial: event.target.checked })} />允许 Spark 动态配图</label>
++      </div>
++    </div>
++  );
++};
++
++export default ImageGenerationPanel;
+diff --git a/components/settings/ImageGenerationSettings.tsx b/components/settings/ImageGenerationSettings.tsx
+new file mode 100644
+index 00000000..6750837a
+--- /dev/null
++++ b/components/settings/ImageGenerationSettings.tsx
+@@ -0,0 +1,113 @@
++import React, { useEffect, useState } from 'react';
++import type { APIConfig, ImageGenerationConfig } from '../../types';
++import { extractModelIds } from '../../utils/modelList';
++import { imageApiUrl, withImageGenerationDefaults } from '../../utils/imageGeneration';
++
++interface Props {
++  apiConfig: APIConfig;
++  updateApiConfig: (updates: Partial<APIConfig>) => void;
++  addToast: (message: string, type?: 'success' | 'error' | 'info') => void;
++}
++
++const fieldClass = 'w-full bg-white/60 border border-slate-200/70 rounded-xl px-3 py-2 text-sm text-slate-700 outline-none focus:border-violet-300';
++
++const ImageGenerationSettings: React.FC<Props> = ({ apiConfig, updateApiConfig, addToast }) => {
++  const [draft, setDraft] = useState<ImageGenerationConfig>(() => withImageGenerationDefaults(apiConfig.imageGeneration));
++  const [models, setModels] = useState<string[]>([]);
++  const [loadingModels, setLoadingModels] = useState(false);
++
++  useEffect(() => setDraft(withImageGenerationDefaults(apiConfig.imageGeneration)), [apiConfig.imageGeneration]);
++  const patch = <K extends keyof ImageGenerationConfig>(key: K, value: ImageGenerationConfig[K]) =>
++    setDraft(current => ({ ...current, [key]: value }));
++
++  const pullModels = async () => {
++    if (!draft.baseUrl || !draft.apiKey) return addToast('请先填写生图基址和 API Key', 'info');
++    setLoadingModels(true);
++    try {
++      const response = await fetch(imageApiUrl(draft.baseUrl, 'models'), {
++        headers: { Authorization: `Bearer ${draft.apiKey}` },
++      });
++      const raw = await response.text();
++      let data: unknown;
++      try { data = JSON.parse(raw); } catch { data = null; }
++      if (!response.ok) throw new Error((data as any)?.error?.message || raw.slice(0, 200) || `HTTP ${response.status}`);
++      const ids = extractModelIds(data).filter(id => /image|dall|flux/i.test(id));
++      const allIds = ids.length > 0 ? ids : extractModelIds(data);
++      setModels(allIds);
++      if (!draft.model && allIds[0]) patch('model', allIds[0]);
++      addToast(allIds.length ? `已拉取 ${allIds.length} 个可选模型` : '接口返回中没有识别到模型', allIds.length ? 'success' : 'info');
++    } catch (error) {
++      addToast(`拉取模型失败：${error instanceof Error ? error.message : String(error)}`, 'error');
++    } finally {
++      setLoadingModels(false);
++    }
++  };
++
++  const save = () => {
++    updateApiConfig({ imageGeneration: withImageGenerationDefaults(draft) });
++    addToast('生图设置已保存', 'success');
++  };
++
++  return (
++    <div className="rounded-2xl border border-violet-200/70 bg-violet-50/40 p-3.5 space-y-3">
++      <div className="flex items-start justify-between gap-3">
++        <div>
++          <div className="text-sm font-bold text-slate-700">🎨 GPT Image 生图</div>
++          <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">支持 OpenAI Images 协议：无参考图走 generations，有参考图走 edits。</p>
++        </div>
++        <button type="button" onClick={() => patch('enabled', !draft.enabled)} className={`w-11 h-6 rounded-full p-0.5 transition-colors ${draft.enabled ? 'bg-violet-500' : 'bg-slate-300'}`}>
++          <span className={`block w-5 h-5 rounded-full bg-white shadow transition-transform ${draft.enabled ? 'translate-x-5' : ''}`} />
++        </button>
++      </div>
++
++      <div className="grid grid-cols-1 gap-2.5">
++        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">API 基址
++          <input className={`${fieldClass} mt-1`} value={draft.baseUrl} onChange={e => patch('baseUrl', e.target.value)} placeholder="https://api.openai.com/v1" />
++        </label>
++        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">API Key
++          <input type="password" className={`${fieldClass} mt-1`} value={draft.apiKey} onChange={e => patch('apiKey', e.target.value)} placeholder="sk-..." autoComplete="off" />
++        </label>
++        <div>
++          <div className="flex items-end gap-2">
++            <label className="flex-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">模型
++              <input className={`${fieldClass} mt-1`} list="image-generation-models" value={draft.model} onChange={e => patch('model', e.target.value)} placeholder="gpt-image-1" />
++            </label>
++            <button type="button" onClick={pullModels} disabled={loadingModels} className="shrink-0 px-3 py-2 rounded-xl bg-violet-100 text-violet-700 text-xs font-bold disabled:opacity-50">
++              {loadingModels ? '拉取中…' : '拉取模型'}
++            </button>
++          </div>
++          <datalist id="image-generation-models">{models.map(model => <option key={model} value={model} />)}</datalist>
++        </div>
++        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">全局生图提示词
++          <textarea className={`${fieldClass} mt-1 min-h-20 resize-y`} value={draft.globalPrompt} onChange={e => patch('globalPrompt', e.target.value)} placeholder="例如：电影感写实摄影，自然肤质，细节丰富…" />
++        </label>
++      </div>
++
++      <div className="grid grid-cols-2 gap-2">
++        <label className="text-[10px] font-bold text-slate-400">尺寸
++          <select className={`${fieldClass} mt-1`} value={draft.size} onChange={e => patch('size', e.target.value as ImageGenerationConfig['size'])}>
++            <option value="auto">自动</option><option value="1024x1024">1024×1024</option><option value="1024x1536">竖图</option><option value="1536x1024">横图</option>
++          </select>
++        </label>
++        <label className="text-[10px] font-bold text-slate-400">质量
++          <select className={`${fieldClass} mt-1`} value={draft.quality} onChange={e => patch('quality', e.target.value as ImageGenerationConfig['quality'])}>
++            <option value="auto">自动</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
++          </select>
++        </label>
++      </div>
++
++      <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
++        <label className="flex items-center gap-2"><input type="checkbox" checked={draft.autoChat} onChange={e => patch('autoChat', e.target.checked)} />聊天主动生图</label>
++        <label className="flex items-center gap-2"><input type="checkbox" checked={draft.autoSocial} onChange={e => patch('autoSocial', e.target.checked)} />Spark 动态配图</label>
++      </div>
++      <label className="block text-[10px] font-bold text-slate-400">聊天生图冷却：至少间隔 {draft.cooldownMessages} 条消息
++        <input type="range" min={0} max={30} value={draft.cooldownMessages} onChange={e => patch('cooldownMessages', Number(e.target.value))} className="w-full accent-violet-500 mt-1" />
++      </label>
++
++      <button type="button" onClick={save} className="w-full py-2.5 rounded-xl bg-violet-500 text-white text-sm font-bold active:scale-[0.99] transition-transform">保存生图设置</button>
++      <p className="text-[10px] text-slate-400 leading-relaxed">Key 仅保存在本机配置中。第三方兼容站必须同时实现 <code>/models</code>、<code>/images/generations</code>，使用参考图时还需实现 <code>/images/edits</code>。</p>
++    </div>
++  );
++};
++
++export default ImageGenerationSettings;
+diff --git a/context/OSContext.tsx b/context/OSContext.tsx
+index 532102bb..284b776c 100644
+--- a/context/OSContext.tsx
++++ b/context/OSContext.tsx
+@@ -632,6 +632,18 @@ const defaultApiConfig: APIConfig = {
+     apiKey: '',
+     model: '',
+   },
++  imageGeneration: {
++    enabled: false,
++    baseUrl: '',
++    apiKey: '',
++    model: 'gpt-image-1',
++    globalPrompt: '',
++    size: '1024x1024',
++    quality: 'auto',
++    autoChat: true,
++    autoSocial: true,
++    cooldownMessages: 6,
++  },
+   minimaxApiKey: '',
+   minimaxGroupId: '',
+   minimaxRegion: 'domestic',
+@@ -2334,7 +2346,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
+                   // 不存在；保持 undefined 即可，与"用户当时根本没在 chat 界面"的语义一致
+                   htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
+                   thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
+-                  visionApiConfig: currentApiConfig.visionApi,
++                visionApiConfig: currentApiConfig.visionApi,
++                imageGenerationConfig: currentApiConfig.imageGeneration,
+               });
+               const systemPrompt = payload.systemPrompt;
+               const apiMessages = payload.cleanedApiMessages;
+diff --git a/hooks/useChatAI.ts b/hooks/useChatAI.ts
+index be97717f..4da5f7f1 100644
+--- a/hooks/useChatAI.ts
++++ b/hooks/useChatAI.ts
+@@ -511,6 +511,7 @@ export const useChatAI = ({
+     const [searchStatus, setSearchStatus] = useState<string>('');
+     const [diaryStatus, setDiaryStatus] = useState<string>('');
+     const [xhsStatus, setXhsStatus] = useState<string>('');
++    const [imageStatus, setImageStatus] = useState<string>('');
+     const [emotionStatus, setEmotionStatus] = useState<string>('');
+     const [memoryPalaceStatus, setMemoryPalaceStatus] = useState<string>('');
+     const [memoryPalaceResult, setMemoryPalaceResult] = useState<import('../utils/memoryPalace/pipeline').PipelineResult | null>(null);
+@@ -1001,6 +1002,7 @@ export const useChatAI = ({
+                 htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
+                 thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
+                 visionApiConfig: apiConfig.visionApi,
++                imageGenerationConfig: apiConfig.imageGeneration,
+                 mcdMiniSnap: mcdMiniOpen ? mcdMiniSnap : undefined,
+                 luckinMiniSnap: luckinMiniOpen ? luckinMiniSnap : undefined,
+                 luckinChat: luckinChatOn ? luckinChatRef?.current : undefined,
+@@ -2115,6 +2117,7 @@ export const useChatAI = ({
+                 emojis,
+                 categories,
+                 realtimeConfig,
++                imageGenerationConfig: apiConfig.imageGeneration,
+                 groups,
+                 contextMsgs,
+                 fullMessages,
+@@ -2134,6 +2137,7 @@ export const useChatAI = ({
+                     setSearchStatus,
+                     setDiaryStatus,
+                     setXhsStatus,
++                    setImageStatus,
+                     updateTokenUsage,
+                     // 整组 musicHooks 由 MusicProvider 注册到模块级 slot, 本地 fetch 路径和
+                     // instant push 路径 (activeMsgRuntime) 共享同一份, 见 MusicContext.loadMusicHooks.
+@@ -2333,6 +2337,7 @@ export const useChatAI = ({
+         searchStatus,
+         diaryStatus,
+         xhsStatus,
++        imageStatus,
+         emotionStatus,
+         memoryPalaceStatus,
+         memoryPalaceResult,
+diff --git a/types.ts b/types.ts
+index 1e7cfaaf..c9bed66f 100644
+--- a/types.ts
++++ b/types.ts
+@@ -263,11 +263,40 @@ export interface VisionApiConfig {
+   model: string;
+ }
+ 
++export type ImageGenerationSize = 'auto' | '1024x1024' | '1024x1536' | '1536x1024';
++export type ImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high';
++
++/** OpenAI Images 协议兼容的独立生图配置。 */
++export interface ImageGenerationConfig {
++  enabled: boolean;
++  baseUrl: string;
++  apiKey: string;
++  model: string;
++  globalPrompt: string;
++  size: ImageGenerationSize;
++  quality: ImageGenerationQuality;
++  autoChat: boolean;
++  autoSocial: boolean;
++  /** 两张主动生成图片之间至少间隔多少条聊天消息，避免模型连续烧额度。 */
++  cooldownMessages: number;
++}
++
++/** 每个角色自己的形象与生图权限。 */
++export interface CharacterImageGenerationProfile {
++  appearancePrompt?: string;
++  referenceImages?: string[];
++  /** 0 = 不使用参考图；100 = 尽量严格保持人物身份。 */
++  faceLockStrength?: number;
++  allowChat?: boolean;
++  allowSocial?: boolean;
++}
++
+ export interface APIConfig {
+   baseUrl: string;
+   apiKey: string;
+   // 可选识图中转：给不支持 image_url 的主模型补视觉能力。
+   visionApi?: VisionApiConfig;
++  imageGeneration?: ImageGenerationConfig;
+   minimaxApiKey?: string;
+   minimaxGroupId?: string;
+   // 'domestic' → https://api.minimaxi.com (国内站)
+@@ -2730,6 +2759,8 @@ export interface CharacterProfile {
+   id: string;
+   name: string;
+   avatar: string;
++  /** GPT Image 生图所需的角色外貌、参考图和场景权限。 */
++  imageGeneration?: CharacterImageGenerationProfile;
+   /**
+    * 视频通话使用的本地 VRM / Live2D 形象。模型二进制包保存在 IndexedDB
+    * blob_assets，角色资料只保存轻量索引，避免把数 MB 的模型塞进
+@@ -3750,6 +3781,8 @@ export interface SocialPost {
+     bgStyle?: string;
+     authorType?: 'user' | 'character' | 'stranger';
+     authorCharId?: string;
++    /** 由角色为这条动态拟定并用于生成配图的场景提示词。 */
++    generatedImagePrompt?: string;
+ }
+ 
+ export interface SubAccount {
+diff --git a/utils/activeMsgRuntime.ts b/utils/activeMsgRuntime.ts
+index a002f114..d4819c99 100644
+--- a/utils/activeMsgRuntime.ts
++++ b/utils/activeMsgRuntime.ts
+@@ -678,6 +678,7 @@ const processInboxMessageWithPostProcessing = async (
+     emojis,
+     categories,
+     realtimeConfig,
++    imageGenerationConfig: apiConfig.imageGeneration,
+     // 日程改动按「角色说这句话的那一刻」判，不是按现在——这条可能在收件箱里躺了一夜，
+     // 昨晚的「22:00 改成陪你聊天」不该落到今天的 22:00 上。
+     spokenAt: message.sentAt,
+diff --git a/utils/apiConfigNormalize.test.ts b/utils/apiConfigNormalize.test.ts
+index 6982a132..9cf17c51 100644
+--- a/utils/apiConfigNormalize.test.ts
++++ b/utils/apiConfigNormalize.test.ts
+@@ -28,6 +28,18 @@ describe('API config normalization', () => {
+         apiKey: '\u200Bvision-key\u2060',
+         model: ' vision-model ',
+       },
++      imageGeneration: {
++        enabled: true,
++        baseUrl: ' https://images.example.com/v1/// ',
++        apiKey: '\u200Bimage-key\u2060',
++        model: ' gpt-image-1 ',
++        globalPrompt: ' cinematic ',
++        size: '1024x1024',
++        quality: 'high',
++        autoChat: true,
++        autoSocial: false,
++        cooldownMessages: 999,
++      },
+     })).toEqual({
+       baseUrl: 'https://api.example.com/v1',
+       apiKey: 'sk-test',
+@@ -41,6 +53,18 @@ describe('API config normalization', () => {
+         apiKey: 'vision-key',
+         model: 'vision-model',
+       },
++      imageGeneration: {
++        enabled: true,
++        baseUrl: 'https://images.example.com/v1',
++        apiKey: 'image-key',
++        model: 'gpt-image-1',
++        globalPrompt: 'cinematic',
++        size: '1024x1024',
++        quality: 'high',
++        autoChat: true,
++        autoSocial: false,
++        cooldownMessages: 100,
++      },
+     });
+   });
+ });
+diff --git a/utils/apiConfigNormalize.ts b/utils/apiConfigNormalize.ts
+index 56243ff2..1bdf6c36 100644
+--- a/utils/apiConfigNormalize.ts
++++ b/utils/apiConfigNormalize.ts
+@@ -18,6 +18,7 @@ export const normalizeApiModel = (value: unknown): string =>
+ 
+ export function normalizeApiConfig(config: APIConfig): APIConfig {
+   const visionApi = config.visionApi;
++  const imageGeneration = config.imageGeneration;
+   return {
+     ...config,
+     baseUrl: normalizeApiBaseUrl(config.baseUrl),
+@@ -31,6 +32,17 @@ export function normalizeApiConfig(config: APIConfig): APIConfig {
+         model: normalizeApiModel(visionApi.model),
+       },
+     } : {}),
++    ...(imageGeneration ? {
++      imageGeneration: {
++        ...imageGeneration,
++        enabled: imageGeneration.enabled === true,
++        baseUrl: normalizeApiBaseUrl(imageGeneration.baseUrl),
++        apiKey: normalizeApiCredential(imageGeneration.apiKey),
++        model: normalizeApiModel(imageGeneration.model),
++        globalPrompt: String(imageGeneration.globalPrompt ?? '').trim(),
++        cooldownMessages: Math.max(0, Math.min(100, Math.round(Number(imageGeneration.cooldownMessages) || 0))),
++      },
++    } : {}),
+   };
+ }
+ 
+diff --git a/utils/applyAssistantPostProcessing.ts b/utils/applyAssistantPostProcessing.ts
+index b2ce0e07..bc87d6ca 100644
+--- a/utils/applyAssistantPostProcessing.ts
++++ b/utils/applyAssistantPostProcessing.ts
+@@ -25,7 +25,7 @@
+  * Phase 2 会让 worker 端把识别出的副作用 (RECALL/SEARCH/...) 结构化传 directives, 这里只重放。
+  */
+ 
+-import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, RealtimeConfig, GroupProfile } from '../types';
++import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, RealtimeConfig, GroupProfile, ImageGenerationConfig } from '../types';
+ import { DB } from './db';
+ import { ChatParser, type FrozenMusicSong } from './chatParser';
+ import { resolveCharTimeZone } from './timezone';
+@@ -56,6 +56,7 @@ import { announceScheduleChanges, applyAssistantScheduleChanges } from './schedu
+ import { isBlobRef } from './blobRef';
+ import { consumeSARChatSurfaceChunk, type SARModuleSurfaceMeta } from './vrWorld/sarModuleRuntime';
+ import { stripLeakedSourceTags } from './sanitize';
++import { canAutoGenerateInChat, extractImageGenerationRequest, generateImageToBlobRef } from './imageGeneration';
+ 
+ // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
+ 
+@@ -481,6 +482,7 @@ export interface PostProcessHooks {
+     setSearchStatus?: (s: string) => void;
+     setDiaryStatus?: (s: string) => void;
+     setXhsStatus?: (s: string) => void;
++    setImageStatus?: (s: string) => void;
+     /** token 计费汇总 (调用方负责把 React state 同步上去) */
+     updateTokenUsage?: (data: any, msgCount: number, pass: string) => void;
+     /** 给 ChatParser.parseAndExecuteActions 用的音乐钩子 */
+@@ -504,6 +506,7 @@ export interface PostProcessCtx {
+     /** 已按当前角色可见性过滤的分类；用于容错解析“分类名: 表情名”。 */
+     categories?: EmojiCategory[];
+     realtimeConfig?: RealtimeConfig;
++    imageGenerationConfig?: ImageGenerationConfig;
+     /** 日程被角色改写后刷新主动消息 fire_pack；旧调用方可不传。 */
+     groups?: GroupProfile[];
+     /**
+@@ -595,6 +598,7 @@ export async function applyAssistantPostProcessing(
+         userProfile,
+         emojis,
+         realtimeConfig,
++        imageGenerationConfig,
+         groups,
+         spokenAt,
+         contextMsgs,
+@@ -629,6 +633,7 @@ export async function applyAssistantPostProcessing(
+         setSearchStatus = () => {},
+         setDiaryStatus = () => {},
+         setXhsStatus = () => {},
++        setImageStatus = () => {},
+         updateTokenUsage = () => {},
+         musicHooks,
+     } = hooks;
+@@ -748,6 +753,10 @@ export async function applyAssistantPostProcessing(
+     // ─── Step 1: 初次粗洗 ───
+     let aiContent = replayedTagPrefix ? `${replayedTagPrefix}${rawAiContent}` : rawAiContent;
+     aiContent = normalizeAiContent(aiContent);
++    // 必须早于 lead-in / 二轮临时渲染消费，否则内部控制标签可能短暂闪进聊天气泡。
++    const initialImageRequest = extractImageGenerationRequest(aiContent);
++    let pendingImageSceneCandidate = initialImageRequest.scenePrompt;
++    aiContent = initialImageRequest.cleanedContent;
+     // 先于 lead-in / 二轮渲染消费：否则控制标签会作为普通气泡短暂闪给用户看。
+     aiContent = await consumeScheduleChanges(aiContent, utteranceAt);
+     // 在任何 lead-in/二轮渲染之前先剥掉仿卡片文本，防止它被 chunkText 拆成灰色普通气泡。
+@@ -2240,6 +2249,15 @@ export async function applyAssistantPostProcessing(
+     // 隔着 RECALL / SEARCH / XHS 几趟往返，隔夜补收的 spokenAt 会把新写的改动整批作废。
+     aiContent = await consumeScheduleChanges(aiContent, new Date());
+ 
++    // 生图标签是内部控制面：无论功能是否开启都先剥掉，绝不把协议文本漏进聊天气泡。
++    // 实际执行还会重新检查开关、角色权限与冷却，避免旧提示词或模型幻觉绕过设置。
++    const imageRequest = extractImageGenerationRequest(aiContent);
++    aiContent = imageRequest.cleanedContent;
++    pendingImageSceneCandidate = imageRequest.scenePrompt || pendingImageSceneCandidate;
++    const pendingImageScene = pendingImageSceneCandidate && canAutoGenerateInChat(imageGenerationConfig, char, contextMsgs)
++        ? pendingImageSceneCandidate
++        : undefined;
++
+     // ─── Step 3: ChatParser.parseAndExecuteActions ───
+     // mcdInheritMeta 一起传下去：戳一戳 / 转账卡 / 音乐卡 / 新闻卡 / 日程系统提示 / 生活记录卡
+     // 跟正文气泡带同一个标记。主动消息处理失败重来时，靠这个标记才认得出「上一趟已经做过了」，
+@@ -2314,4 +2332,41 @@ export async function applyAssistantPostProcessing(
+             setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+         }
+     }
++
++    // 正文先落库，图片生成失败也不影响角色本轮正常回复。
++    if (pendingImageScene && imageGenerationConfig) {
++        setImageStatus(`${char.name} 正在构思画面…`);
++        try {
++            const generated = await generateImageToBlobRef(imageGenerationConfig, char, pendingImageScene);
++            const sourceMessageId = await persistMessage({
++                charId: char.id,
++                role: 'assistant',
++                type: 'image',
++                content: generated.ref,
++                metadata: {
++                    ...(mcdInheritMeta || {}),
++                    generatedImage: true,
++                    scenePrompt: pendingImageScene,
++                    fullPrompt: generated.prompt,
++                    model: imageGenerationConfig.model,
++                },
++            } as any);
++            const now = messageTimestamp ?? Date.now();
++            await DB.saveGalleryImage({
++                id: `generated_${char.id}_${sourceMessageId}`,
++                charId: char.id,
++                url: generated.ref,
++                timestamp: now,
++                sourceMessageId,
++                savedDate: getLocalDateKey(new Date(now)),
++                chatContext: contextMsgs.slice(-6).map(message => message.type === 'text' ? message.content : '[图片]'),
++            });
++            setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
++        } catch (error) {
++            console.error('[ImageGeneration] 角色主动生图失败', error);
++            addToast(error instanceof Error ? error.message : '角色生图失败', 'error');
++        } finally {
++            setImageStatus('');
++        }
++    }
+ }
+diff --git a/utils/buildInfo.ts b/utils/buildInfo.ts
+index 30551b94..4cad2161 100644
+--- a/utils/buildInfo.ts
++++ b/utils/buildInfo.ts
+@@ -14,7 +14,7 @@ export const BUILD_LABEL = `${__BUILD_BRANCH__}@${__BUILD_COMMIT__}`;
+ export const BUILD_TIME_LABEL = __BUILD_TIME__;
+ 
+ /** 设置页底部的产品版本名（手工维护），跟构建 hash 是两码事——发版前改这里。 */
+-export const APP_VERSION = 'v3.10 (SAR)';
++export const APP_VERSION = 'v3.11 (GPT Image)';
+ 
+ /**
+  * 版本号那半截（`v3.0`）。统计给每条记录打的标签用它，面板里按版本切分数据时
+diff --git a/utils/chatPrompts.ts b/utils/chatPrompts.ts
+index 01f274f3..85d390d1 100644
+--- a/utils/chatPrompts.ts
++++ b/utils/chatPrompts.ts
+@@ -1186,6 +1186,12 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
+                 }
+                 
+                 if (m.type === 'image') {
++                     // 角色自己生成的图片已经有结构化场景描述；后续对话只回填语义，不把整张图
++                     // 再次送进视觉上下文（省 token，也避免兼容模型拒绝 assistant image_url）。
++                     if (m.role === 'assistant' && m.metadata?.generatedImage === true) {
++                         const scene = typeof m.metadata?.scenePrompt === 'string' ? m.metadata.scenePrompt.trim() : '';
++                         return { role: 'assistant', content: `${timeStr} [你刚刚生成并发送了一张图片${scene ? `：${scene}` : ''}]` };
++                     }
+                      const visionDescription = options?.useVisionDescriptions
+                          && typeof m.metadata?.visionDescription === 'string'
+                          ? m.metadata.visionDescription.trim()
+diff --git a/utils/chatRequestPayload.ts b/utils/chatRequestPayload.ts
+index fb201458..e4b0724e 100644
+--- a/utils/chatRequestPayload.ts
++++ b/utils/chatRequestPayload.ts
+@@ -13,7 +13,7 @@ import { getMemoryPalaceHighWaterMarkForContext, selectCharacterContextMessages
+  * 等价。新增 caller（runProactive）只是补齐了过去缺的字段。
+  */
+ 
+-import type { CharacterProfile, UserProfile, GroupProfile, Emoji, EmojiCategory, Message, RealtimeConfig, TranslationConfig, VisionApiConfig } from '../types';
++import type { CharacterProfile, UserProfile, GroupProfile, Emoji, EmojiCategory, Message, RealtimeConfig, TranslationConfig, VisionApiConfig, ImageGenerationConfig } from '../types';
+ import { ChatPrompts, detectChatModeTransition } from './chatPrompts';
+ import { ContextBuilder } from './context';
+ import { injectMemoryPalace } from './memoryPalace/pipeline';
+@@ -42,6 +42,7 @@ import type { RecallEntryPoint, RecallTrace } from './memoryPalace/trace';
+ import { loadCollaborationFileCabinetBlock } from '../features/collaboration/chatLibrary';
+ import { buildSARUserSurfaceRequest, selectSARUserSurfaceTargets } from './vrWorld/sarUserSurface';
+ import { getSARModuleRuntimePlan } from './vrWorld/sarModuleRuntime';
++import { buildChatImageGenerationInstruction } from './imageGeneration';
+ 
+ export { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
+ 
+@@ -97,6 +98,8 @@ export interface BuildChatPayloadInput {
+     thinkingChain?: { enabled: boolean; customPrompt?: string };
+     /** 可选识图 API：开启后先把图片持久化转写为 [图片：描述]，主模型只接收文字。 */
+     visionApiConfig?: VisionApiConfig;
++    /** 角色可在普通聊天回复末尾按需发出一次隐藏生图指令。 */
++    imageGenerationConfig?: ImageGenerationConfig;
+     mcdMiniSnap?: McdMiniAppSnapshot;
+     luckinMiniSnap?: LuckinMiniAppSnapshot;
+     /** 瑞幸聊天点单模式 (点"瑞一杯"激活, 角色直接调真实工具) */
+@@ -340,6 +343,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
+         } : undefined,
+     );
+     let systemPrompt = parts.stable;
++    systemPrompt += buildChatImageGenerationInstruction(input.imageGenerationConfig, char, input.historyMsgs);
+     let volatileTail = parts.volatileState;
+     const sarModulePlan = input.recallEntryPoint === 'chat_app'
+         ? getSARModuleRuntimePlan(char, userProfile)
+diff --git a/utils/imageGeneration.test.ts b/utils/imageGeneration.test.ts
+new file mode 100644
+index 00000000..7dbe8848
+--- /dev/null
++++ b/utils/imageGeneration.test.ts
+@@ -0,0 +1,98 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import type { CharacterProfile, ImageGenerationConfig, Message } from '../types';
++import {
++  buildChatImageGenerationInstruction,
++  buildImagePrompt,
++  canAutoGenerateInChat,
++  extractImageGenerationRequest,
++  generateImageToBlobRef,
++  imageApiRoot,
++  imageApiUrl,
++} from './imageGeneration';
++import { dataUrlToBlob, getBlobForRef, putImageBlob } from './blobRef';
++
++const TINY_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
++
++const config: ImageGenerationConfig = {
++  enabled: true,
++  baseUrl: 'https://api.example.com/v1/',
++  apiKey: 'sk-test',
++  model: 'gpt-image-1',
++  globalPrompt: '电影感写实摄影',
++  size: '1024x1024',
++  quality: 'high',
++  autoChat: true,
++  autoSocial: true,
++  cooldownMessages: 3,
++};
++
++const char = {
++  id: 'c1', name: 'Sully', avatar: '',
++  imageGeneration: {
++    appearancePrompt: '黑色长发，琥珀色眼睛',
++    referenceImages: ['blobref:face'],
++    faceLockStrength: 85,
++  },
++} as CharacterProfile;
++
++describe('GPT Image generation helpers', () => {
++  afterEach(() => vi.unstubAllGlobals());
++  it('接受根地址或完整 images 端点', () => {
++    expect(imageApiRoot(' https://api.example.com/v1/images/generations/ ')).toBe('https://api.example.com/v1');
++    expect(imageApiUrl(config.baseUrl, 'images/edits')).toBe('https://api.example.com/v1/images/edits');
++  });
++
++  it('组合全局、角色和场景提示词，并按锁脸强度补身份规则', () => {
++    const prompt = buildImagePrompt(config, char, '雨夜街头回头看镜头');
++    expect(prompt).toContain('电影感写实摄影');
++    expect(prompt).toContain('黑色长发，琥珀色眼睛');
++    expect(prompt).toContain('严格保持参考图中同一人物');
++    expect(prompt).toContain('雨夜街头回头看镜头');
++  });
++
++  it('只消费第一个主动生图标签并从正文彻底剥离协议', () => {
++    const result = extractImageGenerationRequest('看这里。\n[[GENERATE_IMAGE: 海边逆光半身照]]\n[[GENERATE_IMAGE: 不应执行]]');
++    expect(result.scenePrompt).toBe('海边逆光半身照');
++    expect(result.cleanedContent).toBe('看这里。');
++  });
++
++  it('按最近一张生成图片执行消息冷却', () => {
++    const generated = { role: 'assistant', type: 'image', metadata: { generatedImage: true } } as Message;
++    const ordinary = { role: 'user', type: 'text', metadata: {} } as Message;
++    expect(canAutoGenerateInChat(config, char, [generated, ordinary, ordinary])).toBe(false);
++    expect(canAutoGenerateInChat(config, char, [generated, ordinary, ordinary, ordinary])).toBe(true);
++    expect(buildChatImageGenerationInstruction(config, char, [ordinary])).toContain('[[GENERATE_IMAGE:');
++  });
++
++  it('无可用参考图时调用 generations JSON 接口并保存返回图片', async () => {
++    let requestUrl = '';
++    let requestBody = '';
++    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++      requestUrl = String(input);
++      requestBody = String(init?.body || '');
++      return new Response(JSON.stringify({ data: [{ b64_json: TINY_PNG_B64 }] }), { status: 200 });
++    }));
++    const generated = await generateImageToBlobRef(config, { ...char, imageGeneration: { ...char.imageGeneration, referenceImages: [] } }, '窗边自拍');
++    expect(requestUrl).toBe('https://api.example.com/v1/images/generations');
++    expect(JSON.parse(requestBody)).toMatchObject({ model: 'gpt-image-1', n: 1, quality: 'high' });
++    expect((await getBlobForRef(generated.ref))?.type).toBe('image/png');
++  });
++
++  it('有参考图时调用 edits multipart 接口并映射高锁脸强度', async () => {
++    const reference = await putImageBlob(dataUrlToBlob(`data:image/png;base64,${TINY_PNG_B64}`));
++    let requestUrl = '';
++    let form: FormData | undefined;
++    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
++      requestUrl = String(input);
++      form = init?.body as FormData;
++      return new Response(JSON.stringify({ data: [{ b64_json: TINY_PNG_B64 }] }), { status: 200 });
++    }));
++    await generateImageToBlobRef(config, {
++      ...char,
++      imageGeneration: { ...char.imageGeneration, referenceImages: [reference], faceLockStrength: 90 },
++    }, '咖啡店侧脸');
++    expect(requestUrl).toBe('https://api.example.com/v1/images/edits');
++    expect(form?.get('input_fidelity')).toBe('high');
++    expect(form?.getAll('image[]')).toHaveLength(1);
++  });
++});
+diff --git a/utils/imageGeneration.ts b/utils/imageGeneration.ts
+new file mode 100644
+index 00000000..8879daa5
+--- /dev/null
++++ b/utils/imageGeneration.ts
+@@ -0,0 +1,193 @@
++import type {
++  CharacterProfile,
++  ImageGenerationConfig,
++  Message,
++} from '../types';
++import { dataUrlToBlob, getBlobForRef, isBlobRef, putImageBlob } from './blobRef';
++
++export const DEFAULT_IMAGE_GENERATION_CONFIG: ImageGenerationConfig = {
++  enabled: false,
++  baseUrl: '',
++  apiKey: '',
++  model: 'gpt-image-1',
++  globalPrompt: '',
++  size: '1024x1024',
++  quality: 'auto',
++  autoChat: true,
++  autoSocial: true,
++  cooldownMessages: 6,
++};
++
++export function withImageGenerationDefaults(
++  value?: Partial<ImageGenerationConfig> | null,
++): ImageGenerationConfig {
++  return {
++    ...DEFAULT_IMAGE_GENERATION_CONFIG,
++    ...(value || {}),
++    cooldownMessages: Math.max(0, Math.min(100, Math.round(Number(value?.cooldownMessages ?? 6) || 0))),
++  };
++}
++
++const clampStrength = (value: unknown): number =>
++  Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
++
++/** 用户可粘贴 API 根地址，也可误粘完整 images 端点；两者都收敛成根地址。 */
++export function imageApiRoot(baseUrl: string): string {
++  return String(baseUrl || '')
++    .trim()
++    .replace(/\/+$/, '')
++    .replace(/\/images\/(?:generations|edits)$/i, '');
++}
++
++export function imageApiUrl(baseUrl: string, path: 'models' | 'images/generations' | 'images/edits'): string {
++  return `${imageApiRoot(baseUrl)}/${path}`;
++}
++
++export function buildImagePrompt(
++  config: ImageGenerationConfig,
++  char: CharacterProfile,
++  scenePrompt: string,
++): string {
++  const profile = char.imageGeneration;
++  const strength = clampStrength(profile?.faceLockStrength);
++  const hasReferences = strength > 0 && (profile?.referenceImages?.length || 0) > 0;
++  const identityRule = !hasReferences ? '' : strength >= 75
++    ? '严格保持参考图中同一人物的身份特征、脸型、五官比例和辨识度，只改变场景、姿势、服装与光线。'
++    : strength >= 40
++      ? '保持参考图人物可辨识的核心面部特征，同时允许为适应画风和场景做适度调整。'
++      : '参考人物的主要身份特征，但允许较明显的风格化变化。';
++
++  return [
++    config.globalPrompt?.trim(),
++    profile?.appearancePrompt?.trim() ? `角色固定外貌：${profile.appearancePrompt.trim()}` : '',
++    identityRule,
++    `当前画面：${String(scenePrompt || '').trim()}`,
++    '只生成一张完整画面，不要添加文字、水印、对话框或界面边框。',
++  ].filter(Boolean).join('\n');
++}
++
++export function canAutoGenerateInChat(
++  config: ImageGenerationConfig | undefined,
++  char: CharacterProfile,
++  history: Message[],
++): boolean {
++  const resolved = withImageGenerationDefaults(config);
++  if (!resolved.enabled || !resolved.autoChat || char.imageGeneration?.allowChat === false) return false;
++  if (!resolved.baseUrl || !resolved.apiKey || !resolved.model) return false;
++  const lastGenerated = [...history].reverse().findIndex(message => message.metadata?.generatedImage === true);
++  if (lastGenerated < 0) return true;
++  return lastGenerated >= resolved.cooldownMessages;
++}
++
++export function buildChatImageGenerationInstruction(
++  config: ImageGenerationConfig | undefined,
++  char: CharacterProfile,
++  history: Message[],
++): string {
++  if (!canAutoGenerateInChat(config, char, history)) return '';
++  return `
++[可选能力：主动发送情境图片]
++只有当当前情境自然地值得用一张图片表达时，你可以在回复末尾输出一次：
++[[GENERATE_IMAGE: 具体画面描述]]
++画面描述应写清动作、服装、环境、光线、构图和镜头；不要重复角色固定外貌。不要解释这个标记，也不要为了展示能力而频繁使用。每次最多一个标记。`;
++}
++
++export function extractImageGenerationRequest(content: string): {
++  cleanedContent: string;
++  scenePrompt?: string;
++} {
++  let scenePrompt: string | undefined;
++  const cleanedContent = String(content || '').replace(
++    /\[\[GENERATE_IMAGE\s*:\s*([\s\S]*?)\]\]/gi,
++    (_whole, prompt: string) => {
++      if (!scenePrompt && prompt.trim()) scenePrompt = prompt.trim();
++      return '';
++    },
++  ).replace(/\n{3,}/g, '\n\n').trim();
++  return { cleanedContent, scenePrompt };
++}
++
++async function parseImageResponse(response: Response): Promise<Blob> {
++  const raw = await response.text();
++  let body: any;
++  try { body = raw ? JSON.parse(raw) : {}; } catch { body = null; }
++  if (!response.ok) {
++    const message = body?.error?.message || body?.message || raw.slice(0, 300) || `HTTP ${response.status}`;
++    throw new Error(`生图接口请求失败（${response.status}）：${message}`);
++  }
++  const item = body?.data?.[0];
++  if (typeof item?.b64_json === 'string' && item.b64_json) {
++    return dataUrlToBlob(`data:image/png;base64,${item.b64_json}`);
++  }
++  if (typeof item?.url === 'string' && item.url) {
++    const imageResponse = await fetch(item.url);
++    if (!imageResponse.ok) throw new Error(`生成成功，但下载图片失败（${imageResponse.status}）`);
++    return imageResponse.blob();
++  }
++  throw new Error('生图接口没有返回 data[0].b64_json 或 data[0].url');
++}
++
++function requestHeaders(config: ImageGenerationConfig): HeadersInit {
++  return { Authorization: `Bearer ${config.apiKey}` };
++}
++
++function supportsInputFidelity(model: string): boolean {
++  const normalized = model.trim().toLowerCase();
++  return normalized === 'gpt-image-1' || normalized === 'gpt-image-1.5';
++}
++
++/** 调用 OpenAI Images generation/edit 协议并将结果直接存入本地 Blob 仓库。 */
++export async function generateImageToBlobRef(
++  rawConfig: ImageGenerationConfig,
++  char: CharacterProfile,
++  scenePrompt: string,
++): Promise<{ ref: string; prompt: string }> {
++  const config = withImageGenerationDefaults(rawConfig);
++  if (!config.enabled) throw new Error('生图功能未开启');
++  if (!config.baseUrl || !config.apiKey || !config.model) throw new Error('请先填写生图基址、API Key 和模型');
++  const prompt = buildImagePrompt(config, char, scenePrompt);
++  const strength = clampStrength(char.imageGeneration?.faceLockStrength);
++  const referenceValues = strength > 0 ? (char.imageGeneration?.referenceImages || []).slice(0, 4) : [];
++  const referenceBlobs = (await Promise.all(referenceValues.map(async value => {
++    if (isBlobRef(value)) return getBlobForRef(value);
++    if (value.startsWith('data:')) return dataUrlToBlob(value);
++    if (/^https?:\/\//i.test(value)) {
++      const response = await fetch(value);
++      return response.ok ? response.blob() : null;
++    }
++    return null;
++  }))).filter((blob): blob is Blob => blob instanceof Blob);
++
++  let response: Response;
++  if (referenceBlobs.length > 0) {
++    const body = new FormData();
++    body.append('model', config.model);
++    body.append('prompt', prompt);
++    body.append('size', config.size);
++    body.append('quality', config.quality);
++    body.append('n', '1');
++    if (supportsInputFidelity(config.model)) {
++      body.append('input_fidelity', strength >= 60 ? 'high' : 'low');
++    }
++    referenceBlobs.forEach((blob, index) => body.append('image[]', blob, `reference-${index + 1}.png`));
++    response = await fetch(imageApiUrl(config.baseUrl, 'images/edits'), {
++      method: 'POST', headers: requestHeaders(config), body,
++    });
++  } else {
++    response = await fetch(imageApiUrl(config.baseUrl, 'images/generations'), {
++      method: 'POST',
++      headers: { ...requestHeaders(config), 'Content-Type': 'application/json' },
++      body: JSON.stringify({
++        model: config.model,
++        prompt,
++        size: config.size,
++        quality: config.quality,
++        n: 1,
++      }),
++    });
++  }
++
++  const blob = await parseImageResponse(response);
++  return { ref: await putImageBlob(blob), prompt };
++}
++
+-- 
+2.51.1
+
