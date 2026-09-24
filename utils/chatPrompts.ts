@@ -1186,6 +1186,12 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
                 }
                 
                 if (m.type === 'image') {
+                     // 角色自己生成的图片已经有结构化场景描述；后续对话只回填语义，不把整张图
+                     // 再次送进视觉上下文（省 token，也避免兼容模型拒绝 assistant image_url）。
+                     if (m.role === 'assistant' && m.metadata?.generatedImage === true) {
+                         const scene = typeof m.metadata?.scenePrompt === 'string' ? m.metadata.scenePrompt.trim() : '';
+                         return { role: 'assistant', content: `${timeStr} [你刚刚生成并发送了一张图片${scene ? `：${scene}` : ''}]` };
+                     }
                      const visionDescription = options?.useVisionDescriptions
                          && typeof m.metadata?.visionDescription === 'string'
                          ? m.metadata.visionDescription.trim()
