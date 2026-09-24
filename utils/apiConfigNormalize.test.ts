@@ -28,6 +28,18 @@ describe('API config normalization', () => {
         apiKey: '\u200Bvision-key\u2060',
         model: ' vision-model ',
       },
+      imageGeneration: {
+        enabled: true,
+        baseUrl: ' https://images.example.com/v1/// ',
+        apiKey: '\u200Bimage-key\u2060',
+        model: ' gpt-image-1 ',
+        globalPrompt: ' cinematic ',
+        size: '1024x1024',
+        quality: 'high',
+        autoChat: true,
+        autoSocial: false,
+        cooldownMessages: 999,
+      },
     })).toEqual({
       baseUrl: 'https://api.example.com/v1',
       apiKey: 'sk-test',
@@ -40,6 +52,18 @@ describe('API config normalization', () => {
         baseUrl: 'https://vision.example.com/v1',
         apiKey: 'vision-key',
         model: 'vision-model',
+      },
+      imageGeneration: {
+        enabled: true,
+        baseUrl: 'https://images.example.com/v1',
+        apiKey: 'image-key',
+        model: 'gpt-image-1',
+        globalPrompt: 'cinematic',
+        size: '1024x1024',
+        quality: 'high',
+        autoChat: true,
+        autoSocial: false,
+        cooldownMessages: 100,
       },
     });
   });
