@@ -6,7 +6,8 @@ import { DB } from '../utils/db';
 import { CharacterProfile, SocialPost, SocialComment, SubAccount, SocialAppProfile } from '../types';
 import { buildSparkCommentHistory, buildSparkGenerationContext, resolveSparkAuthor, selectSparkParticipants } from '../utils/socialGeneration';
 import { processImageToBlob } from '../utils/file';
-import { putImageBlob } from '../utils/blobRef';
+import { isImageValue, putImageBlob } from '../utils/blobRef';
+import { generateImageToBlobRef, withImageGenerationDefaults } from '../utils/imageGeneration';
 import Modal from '../components/os/Modal';
 import { extractContent, safeResponseJson } from '../utils/safeApi';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
@@ -421,6 +422,23 @@ const SocialApp: React.FC = () => {
         return result.post;
     };
 
+    const generateCharacterPostImage = async (posts: SocialPost[]) => {
+        const config = withImageGenerationDefaults(apiConfig.imageGeneration);
+        if (!config.enabled || !config.autoSocial) return;
+        // 每次刷新至多生成一张，既保持推荐流的图文混合感，也避免一次刷新连续产生多笔费用。
+        const target = posts.find(post => post.authorType === 'character' && post.authorCharId && post.generatedImagePrompt);
+        if (!target) return;
+        const char = characters.find(candidate => candidate.id === target.authorCharId);
+        if (!char || char.imageGeneration?.allowSocial === false) return;
+        try {
+            const generated = await generateImageToBlobRef(config, char, target.generatedImagePrompt!);
+            updatePostInFeed(target.id, current => ({ ...current, images: [generated.ref] }));
+        } catch (error) {
+            console.error('[Spark ImageGeneration] 动态配图失败', error);
+            addToast(`Spark 配图失败：${error instanceof Error ? error.message : String(error)}`, 'error');
+        }
+    };
+
     const removePostFromFeed = (postId: string) => {
         const next = feedRef.current.filter(p => p.id !== postId);
         feedRef.current = next;
@@ -476,6 +494,7 @@ const SocialApp: React.FC = () => {
     "authorName": "必须填身份表中定义的【网名】",
     "title": "简短吸睛的标题",
     "content": "正文内容...",
+    "imagePrompt": "角色帖可填写具体配图画面描述，路人帖填null",
     "emojis": ["🎈", "✨"],
     "likes": 随机数 (0 - 10000)
   },
@@ -526,11 +545,13 @@ const SocialApp: React.FC = () => {
                     bgStyle: getRandomStyle().bg,
                     authorType: isCharacterPost ? 'character' as const : 'stranger' as const,
                     authorCharId: matchedChar?.id,
+                    generatedImagePrompt: isCharacterPost && typeof item.imagePrompt === 'string' ? item.imagePrompt.trim() : undefined,
                 }];
             });
             if (!newPosts.length) throw new Error('模型返回的作者身份不匹配，未添加帖子');
             prependPostsToFeed(newPosts);
             addToast('首页已刷新: 冲浪模式开启', 'success');
+            await generateCharacterPostImage(newPosts);
         } catch (e: any) {
             if (e?.name !== 'AbortError') addToast('刷新失败: ' + e.message, 'error');
         } finally {
@@ -846,7 +867,9 @@ ${buildSparkCommentHistory(post)}
             <div className="aspect-[4/5] w-full flex items-center justify-center relative overflow-hidden" style={{ background: post.bgStyle }}>
                 {/* Decorative Overlay for "Premium" look */}
                 <div className="absolute inset-0 bg-white/5 backdrop-blur-[1px]"></div>
-                <div className="relative z-10 text-6xl drop-shadow-xl filter saturate-150 transform transition-transform group-hover:scale-110 duration-500">{codepointToEmoji(post.images[0])}</div>
+                {isImageValue(post.images[0])
+                    ? <TokenImg value={post.images[0]} className="absolute inset-0 w-full h-full object-cover" alt={post.title} />
+                    : <div className="relative z-10 text-6xl drop-shadow-xl filter saturate-150 transform transition-transform group-hover:scale-110 duration-500">{codepointToEmoji(post.images[0])}</div>}
                 {post.title && (
                     <div className="absolute bottom-0 left-0 w-full p-4 bg-gradient-to-t from-black/50 via-black/20 to-transparent">
                         <h3 className="text-white font-bold text-sm line-clamp-2 drop-shadow-md leading-tight">{post.title}</h3>
@@ -901,7 +924,9 @@ ${buildSparkCommentHistory(post)}
                         <div className="w-full aspect-square flex items-center justify-center text-[8rem] relative overflow-hidden" style={{ background: selectedPost.bgStyle }}>
                             <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/10"></div>
                             {/* Removed animate-bounce-slow to prevent reflow jitter */}
-                            <div className="relative z-10 drop-shadow-2xl filter saturate-125">{codepointToEmoji(selectedPost.images[0])}</div>
+                            {isImageValue(selectedPost.images[0])
+                                ? <TokenImg value={selectedPost.images[0]} className="absolute inset-0 w-full h-full object-cover" alt={selectedPost.title} />
+                                : <div className="relative z-10 drop-shadow-2xl filter saturate-125">{codepointToEmoji(selectedPost.images[0])}</div>}
                         </div>
 
                         <div className="p-6 space-y-4">
@@ -1233,7 +1258,9 @@ ${buildSparkCommentHistory(post)}
                                 <div className="columns-2 gap-2 space-y-2">
                                     {feed.filter(p => profileTab === 'notes' ? (p.authorType === 'user' || (!p.authorType && p.authorName === socialProfile.name)) : p.isCollected).map(post => (
                                         <div key={post.id} onClick={() => handleOpenPost(post)} className="break-inside-avoid bg-white rounded-xl overflow-hidden shadow-sm border border-slate-100 cursor-pointer">
-                                            <div className="aspect-[4/5] flex items-center justify-center text-4xl" style={{ background: post.bgStyle }}>{codepointToEmoji(post.images[0])}</div>
+                                            <div className="aspect-[4/5] flex items-center justify-center text-4xl relative overflow-hidden" style={{ background: post.bgStyle }}>
+                                                {isImageValue(post.images[0]) ? <TokenImg value={post.images[0]} className="absolute inset-0 w-full h-full object-cover" alt={post.title} /> : codepointToEmoji(post.images[0])}
+                                            </div>
                                             <div className="p-3">
                                                 <h4 className="text-xs font-bold text-slate-800 line-clamp-2 leading-tight">{post.title}</h4>
                                                 <div className="flex justify-between items-center mt-2">
