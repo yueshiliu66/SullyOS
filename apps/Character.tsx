@@ -14,6 +14,7 @@ import ImpressionPanel from '../components/character/ImpressionPanel';
 import RoomPlatePanel from '../components/character/RoomPlatePanel';
 import MemoryArchivist from '../components/character/MemoryArchivist';
 import ChibiStudio, { ChibiShelfPanel } from '../components/character/ChibiStudio';
+import ImageGenerationPanel from '../components/character/ImageGenerationPanel';
 import TokenImg from '../components/os/TokenImg';
 import { resolveBlobRefsDeep, migrateDataUrlToRef } from '../utils/blobRef';
 import { characterLaunch } from '../utils/characterLaunch';
@@ -1401,6 +1402,12 @@ ${isInitialGeneration ? `
                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">核心指令 (System Prompt)</label>
                                <textarea value={formData.systemPrompt} onChange={(e) => handleChange('systemPrompt', e.target.value)} className="w-full h-40 bg-white rounded-3xl p-5 text-sm shadow-sm resize-none focus:ring-1 focus:ring-primary/20 transition-all vr-reader-scroll" placeholder="设定..." />
                            </div>
+
+                           <ImageGenerationPanel
+                               value={formData.imageGeneration}
+                               onChange={(imageGeneration) => handleChange('imageGeneration', imageGeneration)}
+                               addToast={addToast}
+                           />
 
                            <div>
                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">世界观 / 设定补充 (Worldview & Lore)</label>
