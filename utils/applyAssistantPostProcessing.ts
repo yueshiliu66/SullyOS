@@ -25,7 +25,7 @@
  * Phase 2 会让 worker 端把识别出的副作用 (RECALL/SEARCH/...) 结构化传 directives, 这里只重放。
  */
 
-import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, RealtimeConfig, GroupProfile } from '../types';
+import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, RealtimeConfig, GroupProfile, ImageGenerationConfig } from '../types';
 import { DB } from './db';
 import { ChatParser, type FrozenMusicSong } from './chatParser';
 import { resolveCharTimeZone } from './timezone';
@@ -56,6 +56,7 @@ import { announceScheduleChanges, applyAssistantScheduleChanges } from './schedu
 import { isBlobRef } from './blobRef';
 import { consumeSARChatSurfaceChunk, type SARModuleSurfaceMeta } from './vrWorld/sarModuleRuntime';
 import { stripLeakedSourceTags } from './sanitize';
+import { canAutoGenerateInChat, extractImageGenerationRequest, generateImageToBlobRef } from './imageGeneration';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -481,6 +482,7 @@ export interface PostProcessHooks {
     setSearchStatus?: (s: string) => void;
     setDiaryStatus?: (s: string) => void;
     setXhsStatus?: (s: string) => void;
+    setImageStatus?: (s: string) => void;
     /** token 计费汇总 (调用方负责把 React state 同步上去) */
     updateTokenUsage?: (data: any, msgCount: number, pass: string) => void;
     /** 给 ChatParser.parseAndExecuteActions 用的音乐钩子 */
@@ -504,6 +506,7 @@ export interface PostProcessCtx {
     /** 已按当前角色可见性过滤的分类；用于容错解析“分类名: 表情名”。 */
     categories?: EmojiCategory[];
     realtimeConfig?: RealtimeConfig;
+    imageGenerationConfig?: ImageGenerationConfig;
     /** 日程被角色改写后刷新主动消息 fire_pack；旧调用方可不传。 */
     groups?: GroupProfile[];
     /**
@@ -595,6 +598,7 @@ export async function applyAssistantPostProcessing(
         userProfile,
         emojis,
         realtimeConfig,
+        imageGenerationConfig,
         groups,
         spokenAt,
         contextMsgs,
@@ -629,6 +633,7 @@ export async function applyAssistantPostProcessing(
         setSearchStatus = () => {},
         setDiaryStatus = () => {},
         setXhsStatus = () => {},
+        setImageStatus = () => {},
         updateTokenUsage = () => {},
         musicHooks,
     } = hooks;
@@ -748,6 +753,10 @@ export async function applyAssistantPostProcessing(
     // ─── Step 1: 初次粗洗 ───
     let aiContent = replayedTagPrefix ? `${replayedTagPrefix}${rawAiContent}` : rawAiContent;
     aiContent = normalizeAiContent(aiContent);
+    // 必须早于 lead-in / 二轮临时渲染消费，否则内部控制标签可能短暂闪进聊天气泡。
+    const initialImageRequest = extractImageGenerationRequest(aiContent);
+    let pendingImageSceneCandidate = initialImageRequest.scenePrompt;
+    aiContent = initialImageRequest.cleanedContent;
     // 先于 lead-in / 二轮渲染消费：否则控制标签会作为普通气泡短暂闪给用户看。
     aiContent = await consumeScheduleChanges(aiContent, utteranceAt);
     // 在任何 lead-in/二轮渲染之前先剥掉仿卡片文本，防止它被 chunkText 拆成灰色普通气泡。
@@ -2240,6 +2249,15 @@ export async function applyAssistantPostProcessing(
     // 隔着 RECALL / SEARCH / XHS 几趟往返，隔夜补收的 spokenAt 会把新写的改动整批作废。
     aiContent = await consumeScheduleChanges(aiContent, new Date());
 
+    // 生图标签是内部控制面：无论功能是否开启都先剥掉，绝不把协议文本漏进聊天气泡。
+    // 实际执行还会重新检查开关、角色权限与冷却，避免旧提示词或模型幻觉绕过设置。
+    const imageRequest = extractImageGenerationRequest(aiContent);
+    aiContent = imageRequest.cleanedContent;
+    pendingImageSceneCandidate = imageRequest.scenePrompt || pendingImageSceneCandidate;
+    const pendingImageScene = pendingImageSceneCandidate && canAutoGenerateInChat(imageGenerationConfig, char, contextMsgs)
+        ? pendingImageSceneCandidate
+        : undefined;
+
     // ─── Step 3: ChatParser.parseAndExecuteActions ───
     // mcdInheritMeta 一起传下去：戳一戳 / 转账卡 / 音乐卡 / 新闻卡 / 日程系统提示 / 生活记录卡
     // 跟正文气泡带同一个标记。主动消息处理失败重来时，靠这个标记才认得出「上一趟已经做过了」，
@@ -2312,6 +2330,43 @@ export async function applyAssistantPostProcessing(
             await renderAndPersist('嗯...', pendingThinkingChain);
         } else {
             setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+        }
+    }
+
+    // 正文先落库，图片生成失败也不影响角色本轮正常回复。
+    if (pendingImageScene && imageGenerationConfig) {
+        setImageStatus(`${char.name} 正在构思画面…`);
+        try {
+            const generated = await generateImageToBlobRef(imageGenerationConfig, char, pendingImageScene);
+            const sourceMessageId = await persistMessage({
+                charId: char.id,
+                role: 'assistant',
+                type: 'image',
+                content: generated.ref,
+                metadata: {
+                    ...(mcdInheritMeta || {}),
+                    generatedImage: true,
+                    scenePrompt: pendingImageScene,
+                    fullPrompt: generated.prompt,
+                    model: imageGenerationConfig.model,
+                },
+            } as any);
+            const now = messageTimestamp ?? Date.now();
+            await DB.saveGalleryImage({
+                id: `generated_${char.id}_${sourceMessageId}`,
+                charId: char.id,
+                url: generated.ref,
+                timestamp: now,
+                sourceMessageId,
+                savedDate: getLocalDateKey(new Date(now)),
+                chatContext: contextMsgs.slice(-6).map(message => message.type === 'text' ? message.content : '[图片]'),
+            });
+            setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+        } catch (error) {
+            console.error('[ImageGeneration] 角色主动生图失败', error);
+            addToast(error instanceof Error ? error.message : '角色生图失败', 'error');
+        } finally {
+            setImageStatus('');
         }
     }
 }
