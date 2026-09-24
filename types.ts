@@ -263,11 +263,40 @@ export interface VisionApiConfig {
   model: string;
 }
 
+export type ImageGenerationSize = 'auto' | '1024x1024' | '1024x1536' | '1536x1024';
+export type ImageGenerationQuality = 'auto' | 'low' | 'medium' | 'high';
+
+/** OpenAI Images 协议兼容的独立生图配置。 */
+export interface ImageGenerationConfig {
+  enabled: boolean;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  globalPrompt: string;
+  size: ImageGenerationSize;
+  quality: ImageGenerationQuality;
+  autoChat: boolean;
+  autoSocial: boolean;
+  /** 两张主动生成图片之间至少间隔多少条聊天消息，避免模型连续烧额度。 */
+  cooldownMessages: number;
+}
+
+/** 每个角色自己的形象与生图权限。 */
+export interface CharacterImageGenerationProfile {
+  appearancePrompt?: string;
+  referenceImages?: string[];
+  /** 0 = 不使用参考图；100 = 尽量严格保持人物身份。 */
+  faceLockStrength?: number;
+  allowChat?: boolean;
+  allowSocial?: boolean;
+}
+
 export interface APIConfig {
   baseUrl: string;
   apiKey: string;
   // 可选识图中转：给不支持 image_url 的主模型补视觉能力。
   visionApi?: VisionApiConfig;
+  imageGeneration?: ImageGenerationConfig;
   minimaxApiKey?: string;
   minimaxGroupId?: string;
   // 'domestic' → https://api.minimaxi.com (国内站)
@@ -2730,6 +2759,8 @@ export interface CharacterProfile {
   id: string;
   name: string;
   avatar: string;
+  /** GPT Image 生图所需的角色外貌、参考图和场景权限。 */
+  imageGeneration?: CharacterImageGenerationProfile;
   /**
    * 视频通话使用的本地 VRM / Live2D 形象。模型二进制包保存在 IndexedDB
    * blob_assets，角色资料只保存轻量索引，避免把数 MB 的模型塞进
@@ -3750,6 +3781,8 @@ export interface SocialPost {
     bgStyle?: string;
     authorType?: 'user' | 'character' | 'stranger';
     authorCharId?: string;
+    /** 由角色为这条动态拟定并用于生成配图的场景提示词。 */
+    generatedImagePrompt?: string;
 }
 
 export interface SubAccount {
